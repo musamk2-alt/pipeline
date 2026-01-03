@@ -1,26 +1,26 @@
+import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import { z } from "zod";
 import { Pool } from "pg";
-import "dotenv/config";
-
 
 const app = express();
 app.use(cors());
-app.use(express.json({ limit: "2mb" }));
+app.use(express.json({ limit: "4mb" }));
 
-// ===== CONFIG =====
-const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || "dev-secret-change-me";
+// =====================
+// CONFIG
+// =====================
+const WEBHOOK_SECRET = (process.env.WEBHOOK_SECRET || "").trim();
 const CREATOR_WALLET =
   process.env.CREATOR_WALLET || "6XiPyaiogYybJZUiryTR216io3YNrLfz1QhFPrELGWuA";
 
-const DATABASE_URL = process.env.DATABASE_URL;
-if (!DATABASE_URL) {
-  throw new Error("DATABASE_URL missing. Set it in your environment variables.");
-}
+// OPTIONAL: if you know your coin mint later, set it. If empty, we only do discovery + store raw events.
+const TARGET_MINT = (process.env.TARGET_MINT || "").trim();
 
-// Supabase typically requires SSL from cloud hosts.
-// rejectUnauthorized:false avoids CA issues in some environments.
+const DATABASE_URL = process.env.DATABASE_URL;
+if (!DATABASE_URL) throw new Error("DATABASE_URL missing. Set it in env vars.");
+
 const pool = new Pool({
   connectionString: DATABASE_URL,
   ssl: { rejectUnauthorized: false },
@@ -28,8 +28,11 @@ const pool = new Pool({
 
 const WebhookSchema = z.array(z.any());
 
-// ===== DB INIT =====
+// =====================
+// DB INIT
+// =====================
 async function initDb() {
+  // raw events
   await pool.query(`
     create table if not exists raw_events (
       id bigserial primary key,
@@ -39,6 +42,7 @@ async function initDb() {
     );
   `);
 
+  // parsed buys
   await pool.query(`
     create table if not exists buys (
       id bigserial primary key,
@@ -53,6 +57,7 @@ async function initDb() {
     );
   `);
 
+  // basic wallet stats (for later “coin memory”)
   await pool.query(`
     create table if not exists wallet_stats (
       wallet text not null,
@@ -66,11 +71,39 @@ async function initDb() {
   `);
 }
 
-// ===== DB HELPERS =====
+// =====================
+// AUTH (robust)
+// =====================
+function normalizeAuthHeader(val) {
+  if (!val) return "";
+  return String(val).trim().replace(/\s+/g, " ");
+}
+
+function isAuthorized(req) {
+  // If you forgot to set WEBHOOK_SECRET in prod, lock it down.
+  if (!WEBHOOK_SECRET) return false;
+
+  const raw = normalizeAuthHeader(req.header("authorization"));
+
+  const expectedBearer = `Bearer ${WEBHOOK_SECRET}`;
+  const expectedWithPrefix = `Authorization: Bearer ${WEBHOOK_SECRET}`;
+
+  // accept a few common variants
+  if (raw === expectedBearer) return true;
+  if (raw === expectedWithPrefix) return true;
+  if (raw.toLowerCase() === expectedBearer.toLowerCase()) return true;
+  if (raw.toLowerCase() === expectedWithPrefix.toLowerCase()) return true;
+
+  return false;
+}
+
+// =====================
+// DB HELPERS
+// =====================
 async function insertRawEvent(signature, blockTimeSeconds, payloadObj) {
   await pool.query(
     `insert into raw_events(signature, block_time, payload)
-     values($1, $2, $3)
+     values($1,$2,$3)
      on conflict (signature) do nothing`,
     [signature, BigInt(blockTimeSeconds), payloadObj]
   );
@@ -82,60 +115,105 @@ async function getStats() {
   return { rawCount: raw.rows[0].c, buyCount: buy.rows[0].c };
 }
 
-// ===== ROUTES =====
+async function insertBuy({ signature, buyer, blockTime, mint, tokenAmount, solSpent, source }) {
+  await pool.query(
+    `insert into buys(signature, buyer_wallet, block_time, mint, token_amount, sol_spent, source)
+     values($1,$2,$3,$4,$5,$6,$7)
+     on conflict (signature, buyer_wallet) do nothing`,
+    [signature, buyer, BigInt(blockTime), mint, tokenAmount, solSpent ?? null, source ?? "unknown"]
+  );
 
-// health
+  // update wallet stats (best effort, used later for "memory")
+  await pool.query(
+    `insert into wallet_stats(wallet, mint, total_bought, buy_count, first_buy_time, last_buy_time)
+     values($1,$2,$3,1, to_timestamp($4), to_timestamp($4))
+     on conflict (wallet, mint) do update set
+       total_bought = wallet_stats.total_bought + excluded.total_bought,
+       buy_count = wallet_stats.buy_count + 1,
+       last_buy_time = excluded.last_buy_time`,
+    [buyer, mint, tokenAmount, Number(blockTime)]
+  );
+}
+
+// =====================
+// PARSERS
+// =====================
+
+// Extract all mints seen in an enhanced tx payload (for discovery)
+function extractMintsFromPayload(p) {
+  const mints = [];
+
+  const tokenTransfers = p?.tokenTransfers || [];
+  for (const t of tokenTransfers) {
+    if (t?.mint) mints.push(t.mint);
+  }
+
+  const changes = p?.accountData?.tokenBalanceChanges || [];
+  for (const c of changes) {
+    if (c?.mint) mints.push(c.mint);
+  }
+
+  return mints;
+}
+
+// Parse "buys" for a target mint (simple & reliable heuristic)
+// A "buy" = someone receives TARGET_MINT tokens (toUserAccount) with tokenAmount > 0
+// SOL spent is best-effort from nativeTransfers outflow of that buyer.
+async function parseBuysForTargetMint({ tx, signature, ts }) {
+  if (!TARGET_MINT) return;
+
+  const tokenTransfers = tx?.tokenTransfers || [];
+  const nativeTransfers = tx?.nativeTransfers || [];
+
+  const mintTransfers = tokenTransfers.filter((t) => t?.mint === TARGET_MINT);
+
+  for (const t of mintTransfers) {
+    const buyer = t?.toUserAccount;
+    const amt = Number(t?.tokenAmount ?? 0);
+
+    if (!buyer || !Number.isFinite(amt) || amt <= 0) continue;
+
+    let solSpent = null;
+    if (Array.isArray(nativeTransfers) && nativeTransfers.length > 0) {
+      const lamportsOut = nativeTransfers
+        .filter((n) => n?.fromUserAccount === buyer && typeof n?.amount === "number")
+        .reduce((sum, n) => sum + n.amount, 0);
+
+      if (lamportsOut > 0) solSpent = lamportsOut / 1e9;
+    }
+
+    await insertBuy({
+      signature,
+      buyer,
+      blockTime: ts,
+      mint: TARGET_MINT,
+      tokenAmount: amt,
+      solSpent,
+      source: tx?.source || "helius",
+    });
+  }
+}
+
+// =====================
+// ROUTES
+// =====================
+
+// Health
 app.get("/health", async (req, res) => {
   try {
     const stats = await getStats();
-    res.json({ ok: true, stats, creator: CREATOR_WALLET });
+    res.json({
+      ok: true,
+      stats,
+      creator: CREATOR_WALLET,
+      targetMint: TARGET_MINT || null,
+    });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e?.message ?? e) });
   }
 });
 
-// debug: latest raw events
-app.get("/debug/top-mints", async (req, res) => {
-  try {
-    const r = await pool.query(`
-      select payload
-      from raw_events
-      order by block_time desc
-      limit 200
-    `);
-
-    const counts = new Map();
-
-    for (const row of r.rows) {
-      const p = row.payload;
-
-      const tokenTransfers = p?.tokenTransfers || [];
-      for (const t of tokenTransfers) {
-        const mint = t?.mint;
-        if (!mint) continue;
-        counts.set(mint, (counts.get(mint) || 0) + 1);
-      }
-
-      const changes = p?.accountData?.tokenBalanceChanges || [];
-      for (const c of changes) {
-        const mint = c?.mint;
-        if (!mint) continue;
-        counts.set(mint, (counts.get(mint) || 0) + 1);
-      }
-    }
-
-    const top = [...counts.entries()]
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 20)
-      .map(([mint, count]) => ({ mint, count }));
-
-    res.json({ ok: true, top });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: String(e?.message ?? e) });
-  }
-});
-
-
+// Debug: latest raw events
 app.get("/debug/raw", async (req, res) => {
   try {
     const stats = await getStats();
@@ -158,11 +236,62 @@ app.get("/debug/raw", async (req, res) => {
   }
 });
 
-// webhook receiver (Helius -> us)
+// Debug: discover top mints from the last N raw events (works even if you don't know your mint yet)
+app.get("/debug/top-mints", async (req, res) => {
+  try {
+    const limit = Math.min(Number(req.query.limit || 200), 1000);
+
+    const r = await pool.query(
+      `select payload
+       from raw_events
+       order by block_time desc
+       limit $1`,
+      [limit]
+    );
+
+    const counts = new Map();
+    for (const row of r.rows) {
+      const p = row.payload;
+      const mints = extractMintsFromPayload(p);
+      for (const mint of mints) {
+        counts.set(mint, (counts.get(mint) || 0) + 1);
+      }
+    }
+
+    const top = [...counts.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 25)
+      .map(([mint, count]) => ({ mint, count }));
+
+    res.json({ ok: true, lookedAt: limit, top });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e?.message ?? e) });
+  }
+});
+
+// Buyers endpoint (will stay empty until TARGET_MINT is set AND real token transfers happen)
+app.get("/buyers", async (req, res) => {
+  try {
+    const limit = Math.min(Number(req.query.limit || 50), 200);
+
+    const r = await pool.query(
+      `select signature, buyer_wallet, block_time, mint, token_amount, sol_spent, source
+       from buys
+       order by block_time desc
+       limit $1`,
+      [limit]
+    );
+
+    res.json({ ok: true, targetMint: TARGET_MINT || null, buyers: r.rows });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e?.message ?? e) });
+  }
+});
+
+// Webhook receiver (Helius -> us)
 app.post("/webhook/helius", async (req, res) => {
   try {
-    const auth = req.header("authorization") || "";
-    if (auth !== `Bearer ${WEBHOOK_SECRET}`) {
+    if (!isAuthorized(req)) {
       return res.status(401).json({ ok: false, error: "unauthorized" });
     }
 
@@ -172,23 +301,29 @@ app.post("/webhook/helius", async (req, res) => {
     }
 
     const txs = parsed.data;
+    let inserted = 0;
 
-    // Insert all events
     for (const tx of txs) {
       const sig = tx.signature ?? tx.transaction?.signatures?.[0];
       const ts = tx.timestamp ? Number(tx.timestamp) : Math.floor(Date.now() / 1000);
       if (!sig) continue;
 
       await insertRawEvent(sig, ts, tx);
+      inserted++;
+
+      // If TARGET_MINT is set, attempt buy parsing
+      await parseBuysForTargetMint({ tx, signature: sig, ts });
     }
 
-    res.json({ ok: true, inserted: txs.length });
+    res.json({ ok: true, inserted });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e?.message ?? e) });
   }
 });
 
-// ===== START =====
+// =====================
+// START
+// =====================
 const PORT = process.env.PORT || 3001;
 
 (async () => {
@@ -196,5 +331,6 @@ const PORT = process.env.PORT || 3001;
   app.listen(PORT, () => {
     console.log(`Server running on http://localhost:${PORT}`);
     console.log(`CREATOR_WALLET: ${CREATOR_WALLET}`);
+    console.log(`TARGET_MINT: ${TARGET_MINT || "(not set)"}`);
   });
 })();
