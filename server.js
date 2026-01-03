@@ -95,6 +95,47 @@ app.get("/health", async (req, res) => {
 });
 
 // debug: latest raw events
+app.get("/debug/top-mints", async (req, res) => {
+  try {
+    const r = await pool.query(`
+      select payload
+      from raw_events
+      order by block_time desc
+      limit 200
+    `);
+
+    const counts = new Map();
+
+    for (const row of r.rows) {
+      const p = row.payload;
+
+      const tokenTransfers = p?.tokenTransfers || [];
+      for (const t of tokenTransfers) {
+        const mint = t?.mint;
+        if (!mint) continue;
+        counts.set(mint, (counts.get(mint) || 0) + 1);
+      }
+
+      const changes = p?.accountData?.tokenBalanceChanges || [];
+      for (const c of changes) {
+        const mint = c?.mint;
+        if (!mint) continue;
+        counts.set(mint, (counts.get(mint) || 0) + 1);
+      }
+    }
+
+    const top = [...counts.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 20)
+      .map(([mint, count]) => ({ mint, count }));
+
+    res.json({ ok: true, top });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e?.message ?? e) });
+  }
+});
+
+
 app.get("/debug/raw", async (req, res) => {
   try {
     const stats = await getStats();
