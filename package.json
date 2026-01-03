@@ -1,0 +1,20 @@
+{
+  "name": "coin-pipeline",
+  "version": "1.0.0",
+  "description": "Helius webhook ingest pipeline for Solana coins",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "dev": "nodemon server.js",
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^9.4.0",
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.3"
+  }
+}
