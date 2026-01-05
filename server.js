@@ -1,6 +1,8 @@
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
+import path from "path";
+import { fileURLToPath } from "url";
 import { z } from "zod";
 import { Pool } from "pg";
 
@@ -15,7 +17,7 @@ const WEBHOOK_SECRET = (process.env.WEBHOOK_SECRET || "").trim();
 const CREATOR_WALLET =
   process.env.CREATOR_WALLET || "6XiPyaiogYybJZUiryTR216io3YNrLfz1QhFPrELGWuA";
 
-// OPTIONAL: if you know your coin mint later, set it. If empty, we only do discovery + store raw events.
+// OPTIONAL: later set when mint exists
 const TARGET_MINT = (process.env.TARGET_MINT || "").trim();
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -28,11 +30,15 @@ const pool = new Pool({
 
 const WebhookSchema = z.array(z.any());
 
+// Resolve /public folder for static hosting
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const publicDir = path.join(__dirname, "public");
+
 // =====================
 // DB INIT
 // =====================
 async function initDb() {
-  // raw events
   await pool.query(`
     create table if not exists raw_events (
       id bigserial primary key,
@@ -42,7 +48,6 @@ async function initDb() {
     );
   `);
 
-  // parsed buys
   await pool.query(`
     create table if not exists buys (
       id bigserial primary key,
@@ -57,7 +62,6 @@ async function initDb() {
     );
   `);
 
-  // basic wallet stats (for later “coin memory”)
   await pool.query(`
     create table if not exists wallet_stats (
       wallet text not null,
@@ -72,7 +76,7 @@ async function initDb() {
 }
 
 // =====================
-// AUTH (robust)
+// AUTH
 // =====================
 function normalizeAuthHeader(val) {
   if (!val) return "";
@@ -80,7 +84,6 @@ function normalizeAuthHeader(val) {
 }
 
 function isAuthorized(req) {
-  // If you forgot to set WEBHOOK_SECRET in prod, lock it down.
   if (!WEBHOOK_SECRET) return false;
 
   const raw = normalizeAuthHeader(req.header("authorization"));
@@ -88,7 +91,6 @@ function isAuthorized(req) {
   const expectedBearer = `Bearer ${WEBHOOK_SECRET}`;
   const expectedWithPrefix = `Authorization: Bearer ${WEBHOOK_SECRET}`;
 
-  // accept a few common variants
   if (raw === expectedBearer) return true;
   if (raw === expectedWithPrefix) return true;
   if (raw.toLowerCase() === expectedBearer.toLowerCase()) return true;
@@ -123,7 +125,6 @@ async function insertBuy({ signature, buyer, blockTime, mint, tokenAmount, solSp
     [signature, buyer, BigInt(blockTime), mint, tokenAmount, solSpent ?? null, source ?? "unknown"]
   );
 
-  // update wallet stats (best effort, used later for "memory")
   await pool.query(
     `insert into wallet_stats(wallet, mint, total_bought, buy_count, first_buy_time, last_buy_time)
      values($1,$2,$3,1, to_timestamp($4), to_timestamp($4))
@@ -138,27 +139,18 @@ async function insertBuy({ signature, buyer, blockTime, mint, tokenAmount, solSp
 // =====================
 // PARSERS
 // =====================
-
-// Extract all mints seen in an enhanced tx payload (for discovery)
 function extractMintsFromPayload(p) {
   const mints = [];
 
   const tokenTransfers = p?.tokenTransfers || [];
-  for (const t of tokenTransfers) {
-    if (t?.mint) mints.push(t.mint);
-  }
+  for (const t of tokenTransfers) if (t?.mint) mints.push(t.mint);
 
   const changes = p?.accountData?.tokenBalanceChanges || [];
-  for (const c of changes) {
-    if (c?.mint) mints.push(c.mint);
-  }
+  for (const c of changes) if (c?.mint) mints.push(c.mint);
 
   return mints;
 }
 
-// Parse "buys" for a target mint (simple & reliable heuristic)
-// A "buy" = someone receives TARGET_MINT tokens (toUserAccount) with tokenAmount > 0
-// SOL spent is best-effort from nativeTransfers outflow of that buyer.
 async function parseBuysForTargetMint({ tx, signature, ts }) {
   if (!TARGET_MINT) return;
 
@@ -170,7 +162,6 @@ async function parseBuysForTargetMint({ tx, signature, ts }) {
   for (const t of mintTransfers) {
     const buyer = t?.toUserAccount;
     const amt = Number(t?.tokenAmount ?? 0);
-
     if (!buyer || !Number.isFinite(amt) || amt <= 0) continue;
 
     let solSpent = null;
@@ -195,25 +186,17 @@ async function parseBuysForTargetMint({ tx, signature, ts }) {
 }
 
 // =====================
-// ROUTES
+// API ROUTES
 // =====================
-
-// Health
 app.get("/health", async (req, res) => {
   try {
     const stats = await getStats();
-    res.json({
-      ok: true,
-      stats,
-      creator: CREATOR_WALLET,
-      targetMint: TARGET_MINT || null,
-    });
+    res.json({ ok: true, stats, creator: CREATOR_WALLET, targetMint: TARGET_MINT || null });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e?.message ?? e) });
   }
 });
 
-// Debug: latest raw events
 app.get("/debug/raw", async (req, res) => {
   try {
     const stats = await getStats();
@@ -236,7 +219,6 @@ app.get("/debug/raw", async (req, res) => {
   }
 });
 
-// Debug: discover top mints from the last N raw events (works even if you don't know your mint yet)
 app.get("/debug/top-mints", async (req, res) => {
   try {
     const limit = Math.min(Number(req.query.limit || 200), 1000);
@@ -251,11 +233,8 @@ app.get("/debug/top-mints", async (req, res) => {
 
     const counts = new Map();
     for (const row of r.rows) {
-      const p = row.payload;
-      const mints = extractMintsFromPayload(p);
-      for (const mint of mints) {
-        counts.set(mint, (counts.get(mint) || 0) + 1);
-      }
+      const mints = extractMintsFromPayload(row.payload);
+      for (const mint of mints) counts.set(mint, (counts.get(mint) || 0) + 1);
     }
 
     const top = [...counts.entries()]
@@ -263,13 +242,12 @@ app.get("/debug/top-mints", async (req, res) => {
       .slice(0, 25)
       .map(([mint, count]) => ({ mint, count }));
 
-    res.json({ ok: true, lookedAt: limit, top });
+    res.json({ ok: true, lookedAt: limit, top, targetMint: TARGET_MINT || null });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e?.message ?? e) });
   }
 });
 
-// Buyers endpoint (will stay empty until TARGET_MINT is set AND real token transfers happen)
 app.get("/buyers", async (req, res) => {
   try {
     const limit = Math.min(Number(req.query.limit || 50), 200);
@@ -288,7 +266,7 @@ app.get("/buyers", async (req, res) => {
   }
 });
 
-// Webhook receiver (Helius -> us)
+// Webhook
 app.post("/webhook/helius", async (req, res) => {
   try {
     if (!isAuthorized(req)) {
@@ -311,7 +289,6 @@ app.post("/webhook/helius", async (req, res) => {
       await insertRawEvent(sig, ts, tx);
       inserted++;
 
-      // If TARGET_MINT is set, attempt buy parsing
       await parseBuysForTargetMint({ tx, signature: sig, ts });
     }
 
@@ -319,6 +296,16 @@ app.post("/webhook/helius", async (req, res) => {
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e?.message ?? e) });
   }
+});
+
+// =====================
+// WEBSITE (STATIC UI)
+// =====================
+app.use(express.static(publicDir));
+
+// fallback: serve index.html for root
+app.get("/", (req, res) => {
+  res.sendFile(path.join(publicDir, "index.html"));
 });
 
 // =====================

@@ -1,0 +1,80 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Coin Memory (Prelaunch)</title>
+    <style>
+      body { font-family: Arial, sans-serif; background:#0b0b0f; color:#eaeaf2; margin:0; }
+      .wrap { max-width: 980px; margin: 0 auto; padding: 24px; }
+      .card { background:#14141c; border:1px solid #242435; border-radius:14px; padding:16px; margin-bottom:16px; }
+      .row { display:flex; gap:12px; flex-wrap: wrap; }
+      .pill { display:inline-block; padding:6px 10px; border-radius:999px; background:#1f1f2c; border:1px solid #2a2a3a; font-size:12px; }
+      .muted { color:#a6a6c2; }
+      code { background:#11111a; padding:2px 6px; border-radius:8px; }
+      table { width:100%; border-collapse: collapse; }
+      td, th { border-bottom:1px solid #242435; padding:10px; text-align:left; font-size:14px; }
+      .small { font-size:12px; }
+      .ok { color:#7CFFB2; }
+      .warn { color:#FFD37C; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h1>Coin Memory</h1>
+      <div class="muted">Prelaunch dashboard — starts empty, becomes alive the moment your mint exists.</div>
+
+      <div class="card">
+        <div class="row">
+          <div class="pill">Status: <span id="status" class="warn">loading</span></div>
+          <div class="pill">rawCount: <span id="rawCount">-</span></div>
+          <div class="pill">buyCount: <span id="buyCount">-</span></div>
+          <div class="pill">targetMint: <code id="targetMint">null</code></div>
+        </div>
+        <div style="margin-top:10px" class="small muted">
+          This is the “alive” signal pump communities like: automation + proof that code is running.
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Latest activity</h2>
+        <div class="muted small">Shows last ingested signatures (even before launch).</div>
+        <table>
+          <thead>
+            <tr><th>Signature</th><th>Block time</th></tr>
+          </thead>
+          <tbody id="latest"></tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <h2>Mint discovery</h2>
+        <div class="muted small">
+          Before launch, this may show random token mints from other transactions.
+          Once your coin is live, your real mint will start dominating here.
+        </div>
+        <table>
+          <thead>
+            <tr><th>Mint</th><th>Count</th></tr>
+          </thead>
+          <tbody id="mints"></tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <h2>Buyers (will populate after launch)</h2>
+        <div class="muted small">
+          This stays empty until TARGET_MINT is set and buys happen.
+        </div>
+        <table>
+          <thead>
+            <tr><th>Buyer</th><th>Token amount</th><th>SOL spent</th><th>Signature</th></tr>
+          </thead>
+          <tbody id="buyers"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
