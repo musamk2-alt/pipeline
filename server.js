@@ -24,9 +24,15 @@ if (!DATABASE_URL) {
   process.exit(1);
 }
 
+// ✅ Supabase session pooler safe
 const pool = new Pool({
   connectionString: DATABASE_URL,
   ssl: { rejectUnauthorized: false },
+  max: 1,
+  min: 0,
+  idleTimeoutMillis: 5000,
+  connectionTimeoutMillis: 10000,
+  allowExitOnIdle: true,
 });
 
 const WebhookSchema = z.array(z.any());
@@ -43,18 +49,18 @@ app.use(express.static(publicDir));
 // BADGE CATALOG
 // =====================
 const BADGE_CATALOG = {
-  // Quest
-  EARLY_SUPPORTER: {
-    cat: "Quest",
-    rarity: "Common",
-    label: "Early Supporter",
-    desc: "Completed the hourly quest when it was FIRST BLOOD hour.",
-  },
+  // Quest badges (mapped 1:1 to quests)
   RESPECT_PAID: {
     cat: "Quest",
     rarity: "Common",
     label: "Respect Paid",
     desc: "Completed the hourly quest when it was SHOW RESPECT hour.",
+  },
+  EARLY_SUPPORTER: {
+    cat: "Quest",
+    rarity: "Common",
+    label: "Early Supporter",
+    desc: "Completed the hourly quest when it was FIRST BLOOD hour.",
   },
   SIGNAL_SENDER: {
     cat: "Quest",
@@ -63,7 +69,7 @@ const BADGE_CATALOG = {
     desc: "Completed the hourly quest when it was SIGNAL CHECK hour.",
   },
 
-  // Rarity
+  // Rarity badges (rank-based)
   FIRST_CLAIMER: {
     cat: "Rarity",
     rarity: "Legendary",
@@ -77,13 +83,13 @@ const BADGE_CATALOG = {
     desc: "Rank #1–#3 claim of the hour.",
   },
 
-  // Streak
+  // Streak badges
   STREAK_2: { cat: "Streak", rarity: "Uncommon", label: "Streak 2", desc: "Claimed 2 hourly quests in a row." },
   STREAK_3: { cat: "Streak", rarity: "Uncommon", label: "Streak 3", desc: "Claimed 3 hourly quests in a row." },
   STREAK_5: { cat: "Streak", rarity: "Rare", label: "Streak 5", desc: "Claimed 5 hourly quests in a row." },
   STREAK_10:{ cat: "Streak", rarity: "Legendary", label: "Streak 10", desc: "Claimed 10 hourly quests in a row." },
 
-  // Memory milestones
+  // Memory badges
   FIRST_SEEN:   { cat: "Memory", rarity: "Common", label: "First Seen", desc: "First interaction detected with the creator wallet." },
   REGULAR:      { cat: "Memory", rarity: "Uncommon", label: "Regular", desc: "Hit 5 creator-wallet interactions." },
   KNOWN_ENTITY: { cat: "Memory", rarity: "Rare", label: "Known Entity", desc: "Hit 10 creator-wallet interactions." },
@@ -149,7 +155,6 @@ async function initDb() {
     on wallet_events(wallet, block_time desc);
   `);
 
-  // quest_claims (create + add hour_index if table existed already)
   await pool.query(`
     create table if not exists quest_claims (
       id bigserial primary key,
@@ -159,6 +164,7 @@ async function initDb() {
       created_at timestamptz not null default now()
     );
   `);
+
   await pool.query(`alter table quest_claims add column if not exists hour_index bigint;`);
   await pool.query(`create index if not exists idx_quest_claims_quest_key on quest_claims(quest_key);`);
   await pool.query(`create index if not exists idx_quest_claims_wallet_hour on quest_claims(wallet, hour_index desc);`);
@@ -335,7 +341,7 @@ async function parseMemoryFromTx({ tx, sig, ts }) {
 }
 
 // =====================
-// QUEST
+// QUESTS (deterministic rotation)
 // =====================
 function getQuestKey(now = Date.now()) {
   const d = new Date(now);
@@ -348,16 +354,45 @@ function getQuestKey(now = Date.now()) {
 function hourIndexFromNow(now = Date.now()) {
   return Math.floor(now / 1000 / 3600);
 }
-function pickQuest(questKey) {
-  const QUESTS = [
-    { id:"first-blood", title:"FIRST BLOOD", rule:`Send at least 0.001 SOL to the creator wallet.`, type:"sol_to_creator_min", minSol:0.001, badge:"EARLY_SUPPORTER" },
-    { id:"respect", title:"SHOW RESPECT", rule:`Send at least 0.0005 SOL to the creator wallet.`, type:"sol_to_creator_min", minSol:0.0005, badge:"RESPECT_PAID" },
-    { id:"signal", title:"SIGNAL CHECK", rule:`Any SOL interaction to the creator wallet (>= 0.0001 SOL).`, type:"sol_to_creator_min", minSol:0.0001, badge:"SIGNAL_SENDER" },
-  ];
-  let hash = 0;
-  for (let i = 0; i < questKey.length; i++) hash = (hash * 31 + questKey.charCodeAt(i)) >>> 0;
-  return QUESTS[hash % QUESTS.length];
+function hash32(str){
+  let h = 0;
+  for (let i=0;i<str.length;i++) h = (h*31 + str.charCodeAt(i)) >>> 0;
+  return h>>>0;
 }
+
+// ✅ All quests live here (the whole list)
+const QUESTS = [
+  {
+    id:"respect",
+    title:"SHOW RESPECT",
+    rule:`Send at least 0.0005 SOL to the creator wallet.`,
+    type:"sol_to_creator_min",
+    minSol:0.0005,
+    badge:"RESPECT_PAID",
+  },
+  {
+    id:"first-blood",
+    title:"FIRST BLOOD",
+    rule:`Send at least 0.001 SOL to the creator wallet.`,
+    type:"sol_to_creator_min",
+    minSol:0.001,
+    badge:"EARLY_SUPPORTER",
+  },
+  {
+    id:"signal",
+    title:"SIGNAL CHECK",
+    rule:`Any SOL interaction to the creator wallet (>= 0.0001 SOL).`,
+    type:"sol_to_creator_min",
+    minSol:0.0001,
+    badge:"SIGNAL_SENDER",
+  },
+];
+
+function pickQuest(questKey) {
+  const idx = hash32(questKey) % QUESTS.length;
+  return QUESTS[idx];
+}
+
 function getQuest(now = Date.now()) {
   const questKey = getQuestKey(now);
   const quest = pickQuest(questKey);
@@ -375,6 +410,12 @@ function getQuest(now = Date.now()) {
     endsAt: end,
     msLeft,
   };
+}
+
+function questForHourIndex(hourIndex){
+  const key = getQuestKey(hourIndex*3600*1000);
+  const q = pickQuest(key);
+  return { ...q, questKey: key, hourIndex };
 }
 
 async function verifyQuestClaim({ quest, wallet, signature }) {
@@ -395,7 +436,6 @@ async function verifyQuestClaim({ quest, wallet, signature }) {
     return from === wallet && to === CREATOR_WALLET && typeof amt === "number" && amt >= minLamports;
   });
   if (!hit) return { ok: false, reason: "rule_not_met" };
-
   return { ok: true };
 }
 
@@ -464,7 +504,19 @@ app.get("/badges/progress/:wallet", async (req, res) => {
     };
   });
 
-  res.json({ ok: true, wallet, interactions, streak, progress });
+  // also show quest badges as unlocked/locked based on wallet_badges
+  const questProgress = QUESTS.map(q => ({
+    badge: q.badge,
+    info: badgeInfo(q.badge),
+    unlocked: unlocked.has(q.badge),
+    have: unlocked.has(q.badge) ? 1 : 0,
+    need: 1,
+    remaining: unlocked.has(q.badge) ? 0 : 1,
+    pct: unlocked.has(q.badge) ? 100 : 0,
+    nextUnlockIn: unlocked.has(q.badge) ? null : 1,
+  }));
+
+  res.json({ ok: true, wallet, interactions, streak, progress, questProgress });
 });
 
 app.get("/health", async (_, res) => {
@@ -473,6 +525,53 @@ app.get("/health", async (_, res) => {
     stats: await getStats(),
     creator: CREATOR_WALLET,
     targetMint: TARGET_MINT || null,
+  });
+});
+
+// ✅ Quest overview (A)
+app.get("/quest/overview", async (_, res) => {
+  const now = Date.now();
+  const active = getQuest(now);
+  const h = active.hourIndex;
+
+  // deterministic preview: next 3 hours (locked)
+  const next = [1,2,3].map(d => questForHourIndex(h + d)).map(q => ({
+    id: q.id,
+    title: q.title,
+    rule: q.rule,
+    minSol: q.minSol,
+    badge: q.badge,
+    badgeInfo: badgeInfo(q.badge),
+    hourIndex: q.hourIndex,
+    questKey: q.questKey,
+  }));
+
+  // show full pool to prove it's not random chaos
+  const poolList = QUESTS.map(q => ({
+    id:q.id, title:q.title, rule:q.rule, minSol:q.minSol, badge:q.badge, badgeInfo: badgeInfo(q.badge)
+  }));
+
+  const c = await pool.query(`select count(*)::int as c from quest_claims where quest_key=$1`, [active.questKey]);
+
+  res.json({
+    ok:true,
+    active: {
+      questKey: active.questKey,
+      hourIndex: active.hourIndex,
+      id: active.id,
+      title: active.title,
+      rule: active.rule,
+      minSol: active.minSol,
+      endsAt: active.endsAt,
+      msLeft: active.msLeft,
+      creatorWallet: active.creatorWallet,
+      claims: c.rows[0].c,
+      badge: active.badge,
+      badgeInfo: badgeInfo(active.badge),
+    },
+    next,
+    pool: poolList,
+    deterministic: true,
   });
 });
 
@@ -647,9 +746,11 @@ app.post("/quest/claim", async (req, res) => {
 
   const awarded = [];
 
+  // ✅ quest badge
   await awardBadge(wallet, q.badge, `Quest ${q.questKey}: ${q.title}`);
   awarded.push({ badge: q.badge, info: badgeInfo(q.badge) });
 
+  // rank badges
   if (myRank === 1) {
     await awardBadge(wallet, "FIRST_CLAIMER", `First claim of ${q.questKey}`);
     awarded.push({ badge: "FIRST_CLAIMER", info: badgeInfo("FIRST_CLAIMER") });
@@ -659,6 +760,7 @@ app.post("/quest/claim", async (req, res) => {
     awarded.push({ badge: "TOP3_CLAIMER", info: badgeInfo("TOP3_CLAIMER") });
   }
 
+  // streak
   const streak = await calcStreak(wallet, q.hourIndex);
 
   if (streak >= 2) { await awardBadge(wallet, "STREAK_2", "Claimed 2 hourly quests in a row"); awarded.push({ badge:"STREAK_2", info: badgeInfo("STREAK_2") }); }
@@ -690,6 +792,14 @@ app.post("/webhook/helius", async (req, res) => {
 
 // START
 const PORT = process.env.PORT || 3001;
+
+async function shutdown() {
+  try { await pool.end(); } catch {}
+  process.exit(0);
+}
+process.on("SIGINT", shutdown);
+process.on("SIGTERM", shutdown);
+
 (async () => {
   await initDb();
   app.listen(PORT, () => console.log(`✅ http://localhost:${PORT}`));
