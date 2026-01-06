@@ -6,6 +6,9 @@ const setText = (id, t) => { const x=$(id); if(x) x.textContent = t; };
 const setHtml = (id, h) => { const x=$(id); if(x) x.innerHTML = h; };
 const short = (s, n=18) => (s && s.length>n ? s.slice(0,n)+"…" : (s||""));
 
+/** ✅ Vercel prefix */
+const API = "/api";
+
 async function safeJson(url, opts){
   const r = await fetch(url, { cache:"no-store", ...(opts||{}) });
   let j=null; try{ j=await r.json(); }catch{}
@@ -17,11 +20,12 @@ function statusChip(state){
   const chip = $("statusChip");
   const dot = chip?.querySelector(".dot");
   if(!chip || !dot) return;
+
   if(state === "online"){
-    dot.style.background = "var(--ok)";
-    dot.style.boxShadow = "0 0 0 4px rgba(53,255,122,.10), 0 0 18px rgba(53,255,122,.35)";
+    dot.style.background = "var(--green, #2dff9b)";
+    dot.style.boxShadow = "0 0 0 4px rgba(45,255,155,.10), 0 0 18px rgba(45,255,155,.35)";
   } else if(state === "error"){
-    dot.style.background = "var(--bad)";
+    dot.style.background = "#ff4d7d";
     dot.style.boxShadow = "0 0 0 4px rgba(255,77,125,.10), 0 0 18px rgba(255,77,125,.35)";
   } else {
     dot.style.background = "rgba(255,255,255,.25)";
@@ -40,7 +44,7 @@ function formatCountdown(ms){
 
 async function loadHealth(){
   try{
-    const h = await safeJson("/health");
+    const h = await safeJson(`${API}/health`);
     setText("status","online");
     statusChip("online");
     setText("rawCount", h.stats?.rawCount ?? "-");
@@ -55,7 +59,7 @@ async function loadHealth(){
 }
 
 async function loadQuestOverview(){
-  const q = await safeJson("/quest/overview");
+  const q = await safeJson(`${API}/quest/overview`);
   currentQuest = q.active;
 
   setText("questTitle", q.active.title);
@@ -91,19 +95,20 @@ async function loadQuestOverview(){
 
 async function loadClaims(){
   try{
-    const c = await safeJson("/quest/claims?limit=10");
+    const c = await safeJson(`${API}/quest/claims?limit=10`);
     const list = c.claims || [];
     setText("claimsMeta", `(${list.length})`);
     const body = $("claims"); body.innerHTML="";
     $("claimsEmpty").style.display = list.length ? "none" : "block";
 
-    list.forEach(x=>{
+    // rank optioneel; als backend geen rank geeft, nummeren we gewoon zelf
+    list.forEach((x, idx)=>{
       const tr=document.createElement("tr");
       tr.innerHTML = `
-        <td class="mono"><b>#${x.rank ?? "-"}</b></td>
+        <td class="mono"><b>#${x.rank ?? (idx+1)}</b></td>
         <td class="mono">${short(x.wallet, 28)}</td>
         <td class="mono">${short(x.signature, 28)}</td>
-        <td class="mono" style="opacity:.7">${new Date(x.created_at).toLocaleTimeString()}</td>
+        <td class="mono" style="opacity:.7">${x.created_at ? new Date(x.created_at).toLocaleTimeString() : "-"}</td>
       `;
       body.appendChild(tr);
     });
@@ -112,7 +117,7 @@ async function loadClaims(){
 
 async function loadActors(){
   try{
-    const a = await safeJson("/memory/actors?limit=50");
+    const a = await safeJson(`${API}/memory/actors?limit=50`);
     const actors = a.actors || [];
     setText("actorsMeta", `(${actors.length})`);
 
@@ -129,7 +134,7 @@ async function loadActors(){
         </td>
         <td>${x.vibe}</td>
         <td class="mono">${x.badge_count ?? 0}</td>
-        <td class="mono">${x.interactions}</td>
+        <td class="mono">${x.interactions ?? 0}</td>
       `;
       tr.addEventListener("click", ()=> loadWalletTimeline(x.wallet));
       body.appendChild(tr);
@@ -155,14 +160,19 @@ async function loadWalletTimeline(wallet){
   selectedWallet = wallet;
   setText("walletMeta", `loading ${short(wallet, 26)}…`);
 
-  const data = await safeJson(`/memory/wallet/${wallet}`);
+  const data = await safeJson(`${API}/memory/wallet/${wallet}`);
   const meta = data.wallet;
-  const codename = data.profile?.codename || short(wallet, 26);
-  setText("walletMeta", `${codename} · vibe:${meta?.vibe ?? "?"} · interactions:${meta?.interactions ?? 0}`);
+  const codename = data.profile?.codename || data.wallet?.codename || short(wallet, 26);
+
+  setText(
+    "walletMeta",
+    `${codename} · vibe:${meta?.vibe ?? "?"} · interactions:${meta?.interactions ?? 0}`
+  );
 
   const badgeWrap = $("walletBadges");
   badgeWrap.innerHTML = "";
   const badges = data.badges || [];
+
   if(!badges.length){
     badgeWrap.innerHTML = `<span class="badge">No badges yet</span>`;
   }else{
@@ -174,8 +184,8 @@ async function loadWalletTimeline(wallet){
     });
   }
 
-  const p = await safeJson(`/badges/progress/${wallet}`);
-  setText("progressMeta", `streak:${p.streak} · interactions:${p.interactions}`);
+  const p = await safeJson(`${API}/badges/progress/${wallet}`);
+  setText("progressMeta", `interactions:${p.interactions ?? 0}`);
 
   const box = $("progressBox");
   const prog = p.progress || [];
@@ -185,7 +195,7 @@ async function loadWalletTimeline(wallet){
   const quest = qprog.map(x => progressRow(x.info?.label || x.badge, x.have, x.need, x.unlocked)).join("");
 
   box.innerHTML = `
-    <div class="small" style="padding:12px 12px 0">Memory & Streak</div>
+    <div class="small" style="padding:12px 12px 0">Memory</div>
     ${mem || `<div class="empty" style="display:block">No progress yet.</div>`}
     <div class="small" style="padding:12px 12px 0">Quest Badges</div>
     ${quest || `<div class="empty" style="display:block">No quest badges yet.</div>`}
@@ -199,8 +209,8 @@ async function loadWalletTimeline(wallet){
   evs.slice(0,40).forEach(e=>{
     const tr=document.createElement("tr");
     tr.innerHTML = `
-      <td class="mono" style="opacity:.7">${e.block_time}</td>
-      <td>${e.kind}</td>
+      <td class="mono" style="opacity:.7">${e.block_time ?? "-"}</td>
+      <td>${e.kind ?? "-"}</td>
       <td class="mono">${e.amount ?? "-"}</td>
       <td class="mono">${e.other_wallet ? short(e.other_wallet, 18) : "-"}</td>
       <td class="mono">${short(e.signature, 18)}</td>
@@ -215,7 +225,7 @@ async function claimQuest(){
   if(!wallet || !signature) return;
 
   try{
-    await safeJson("/quest/claim", {
+    await safeJson(`${API}/quest/claim`, {
       method:"POST",
       headers:{ "Content-Type":"application/json" },
       body: JSON.stringify({ wallet, signature })
@@ -229,7 +239,7 @@ async function claimQuest(){
   }
 }
 
-$("refreshBtn").addEventListener("click", async ()=>{
+$("refreshBtn")?.addEventListener("click", async ()=>{
   await loadHealth();
   await loadQuestOverview();
   await loadClaims();
@@ -237,7 +247,7 @@ $("refreshBtn").addEventListener("click", async ()=>{
   if(selectedWallet) await loadWalletTimeline(selectedWallet);
 });
 
-$("claimBtn").addEventListener("click", claimQuest);
+$("claimBtn")?.addEventListener("click", claimQuest);
 
 (async function boot(){
   statusChip("loading");
