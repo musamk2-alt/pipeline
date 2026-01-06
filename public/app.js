@@ -1,16 +1,32 @@
 let selectedWallet = null;
 let currentQuest = null;
 
-function el(id) { return document.getElementById(id); }
-function setText(id, t){ const x=el(id); if(x) x.textContent = t; }
-function setHtml(id, h){ const x=el(id); if(x) x.innerHTML = h; }
-function short(s, n = 18) { return s && s.length > n ? s.slice(0,n)+"…" : (s||""); }
+const $ = (id) => document.getElementById(id);
+const setText = (id, t) => { const x=$(id); if(x) x.textContent = t; };
+const setHtml = (id, h) => { const x=$(id); if(x) x.innerHTML = h; };
+const short = (s, n=18) => (s && s.length>n ? s.slice(0,n)+"…" : (s||""));
 
-async function safeJson(url, opts) {
+async function safeJson(url, opts){
   const r = await fetch(url, { cache:"no-store", ...(opts||{}) });
   let j=null; try{ j=await r.json(); }catch{}
   if(!r.ok) throw new Error(j?.error || `${url} -> ${r.status}`);
   return j;
+}
+
+function statusChip(state){
+  const chip = $("statusChip");
+  const dot = chip?.querySelector(".dot");
+  if(!chip || !dot) return;
+  if(state === "online"){
+    dot.style.background = "var(--ok)";
+    dot.style.boxShadow = "0 0 0 4px rgba(53,255,122,.10), 0 0 18px rgba(53,255,122,.35)";
+  } else if(state === "error"){
+    dot.style.background = "var(--bad)";
+    dot.style.boxShadow = "0 0 0 4px rgba(255,77,125,.10), 0 0 18px rgba(255,77,125,.35)";
+  } else {
+    dot.style.background = "rgba(255,255,255,.25)";
+    dot.style.boxShadow = "0 0 0 4px rgba(255,255,255,.06)";
+  }
 }
 
 function formatCountdown(ms){
@@ -26,6 +42,7 @@ async function loadHealth(){
   try{
     const h = await safeJson("/health");
     setText("status","online");
+    statusChip("online");
     setText("rawCount", h.stats?.rawCount ?? "-");
     setText("buyCount", h.stats?.buyCount ?? "-");
     setText("targetMint", h.targetMint ?? "null");
@@ -33,10 +50,10 @@ async function loadHealth(){
     setText("lastUpdated", `Updated ${new Date().toLocaleTimeString()}`);
   }catch{
     setText("status","error");
+    statusChip("error");
   }
 }
 
-// ✅ NEW: Quest overview (A)
 async function loadQuestOverview(){
   const q = await safeJson("/quest/overview");
   currentQuest = q.active;
@@ -46,47 +63,47 @@ async function loadQuestOverview(){
   setText("questClaimsCount", String(q.active.claims));
   setText("questCountdown", formatCountdown(q.active.msLeft));
 
-  // active badge
-  const badgeWrap = el("questBadgeWrap");
-  badgeWrap.innerHTML = `<span class="pill">badge: <b>${q.active.badgeInfo?.label || q.active.badge}</b></span>`;
+  setHtml("questBadgeWrap", `
+    <span class="badge"><span class="spark">💊</span> badge: <b>${q.active.badgeInfo?.label || q.active.badge}</b></span>
+    <span class="badge"><span class="spark">✓</span> $EMOTIONS live system</span>
+  `);
 
-  // next quests
   const next = q.next || [];
   setHtml("nextQuests", next.map((x,i)=>`
-    <div style="margin-bottom:12px">
-      <div class="tag">+${i+1}h · locked</div>
-      <div style="font-size:16px;font-weight:900;margin-top:4px">${x.title}</div>
-      <div class="muted" style="margin-top:4px">${x.rule}</div>
-      <div class="row" style="margin-top:8px">
-        <span class="pill">badge: <b>${x.badgeInfo?.label || x.badge}</b></span>
+    <div class="item">
+      <div class="lock">+${i+1}h · locked</div>
+      <div class="t">${x.title}</div>
+      <div class="r">${x.rule}</div>
+      <div class="chips" style="margin-top:10px">
+        <span class="badge"><span class="spark">💊</span> ${x.badgeInfo?.label || x.badge}</span>
       </div>
     </div>
   `).join(""));
 
-  // pool proof
   const pool = q.pool || [];
   setHtml("questPool", pool.map(x=>`
-    <div style="margin-bottom:10px">
-      <span class="pill">${x.title}</span>
-      <span class="muted">${x.rule}</span>
+    <div class="item">
+      <div class="t">${x.title}</div>
+      <div class="r">${x.rule}</div>
     </div>
   `).join(""));
 }
 
 async function loadClaims(){
   try{
-    const c = await safeJson("/quest/claims?limit=8");
-    const list=c.claims||[];
+    const c = await safeJson("/quest/claims?limit=10");
+    const list = c.claims || [];
     setText("claimsMeta", `(${list.length})`);
-    const body=el("claims"); body.innerHTML="";
-    el("claimsEmpty").style.display = list.length ? "none":"block";
+    const body = $("claims"); body.innerHTML="";
+    $("claimsEmpty").style.display = list.length ? "none" : "block";
+
     list.forEach(x=>{
       const tr=document.createElement("tr");
       tr.innerHTML = `
         <td class="mono"><b>#${x.rank ?? "-"}</b></td>
-        <td class="mono">${short(x.wallet, 22)}</td>
-        <td class="mono">${short(x.signature, 22)}</td>
-        <td class="mono muted">${new Date(x.created_at).toLocaleTimeString()}</td>
+        <td class="mono">${short(x.wallet, 28)}</td>
+        <td class="mono">${short(x.signature, 28)}</td>
+        <td class="mono" style="opacity:.7">${new Date(x.created_at).toLocaleTimeString()}</td>
       `;
       body.appendChild(tr);
     });
@@ -96,18 +113,19 @@ async function loadClaims(){
 async function loadActors(){
   try{
     const a = await safeJson("/memory/actors?limit=50");
-    const actors=a.actors||[];
+    const actors = a.actors || [];
     setText("actorsMeta", `(${actors.length})`);
-    const body=el("actors"); body.innerHTML="";
-    el("actorsEmpty").style.display = actors.length ? "none":"block";
+
+    const body = $("actors"); body.innerHTML="";
+    $("actorsEmpty").style.display = actors.length ? "none" : "block";
 
     actors.forEach(x=>{
       const tr=document.createElement("tr");
       tr.style.cursor="pointer";
       tr.innerHTML = `
         <td>
-          <div><b>${x.codename || "Unknown"}</b></div>
-          <div class="mono muted" style="font-size:12px">${short(x.wallet, 32)}</div>
+          <div style="font-weight:900">${x.codename || "Unknown"}</div>
+          <div class="mono" style="opacity:.65;font-size:12px">${short(x.wallet, 36)}</div>
         </td>
         <td>${x.vibe}</td>
         <td class="mono">${x.badge_count ?? 0}</td>
@@ -119,7 +137,20 @@ async function loadActors(){
   }catch{}
 }
 
-// ✅ wallet view now also loads quest badge progress (B)
+function progressRow(label, have, need, unlocked){
+  const pct = need===0 ? 100 : Math.floor((Math.min(have,need)/need)*100);
+  const remaining = Math.max(0, need - have);
+  return `
+    <div class="progressRow">
+      <div class="progressTop">
+        <div><b>${unlocked ? "✓" : "🔒"} ${label}</b></div>
+        <div style="opacity:.7">${have}/${need}${unlocked ? "" : ` · next unlock in ${remaining}`}</div>
+      </div>
+      <div class="barOuter"><div class="barInner" style="width:${pct}%"></div></div>
+    </div>
+  `;
+}
+
 async function loadWalletTimeline(wallet){
   selectedWallet = wallet;
   setText("walletMeta", `loading ${short(wallet, 26)}…`);
@@ -129,65 +160,46 @@ async function loadWalletTimeline(wallet){
   const codename = data.profile?.codename || short(wallet, 26);
   setText("walletMeta", `${codename} · vibe:${meta?.vibe ?? "?"} · interactions:${meta?.interactions ?? 0}`);
 
-  // unlocked badges
-  const badgeWrap = el("walletBadges");
+  const badgeWrap = $("walletBadges");
   badgeWrap.innerHTML = "";
   const badges = data.badges || [];
   if(!badges.length){
-    badgeWrap.innerHTML = `<span class="pill">No badges yet</span>`;
-  } else {
+    badgeWrap.innerHTML = `<span class="badge">No badges yet</span>`;
+  }else{
     badges.slice(0,20).forEach(b=>{
-      const span = document.createElement("span");
-      span.className = "pill";
-      span.textContent = b.info?.label || b.badge;
-      badgeWrap.appendChild(span);
+      const s=document.createElement("span");
+      s.className="badge";
+      s.innerHTML = `<span class="spark">💊</span> ${b.info?.label || b.badge}`;
+      badgeWrap.appendChild(s);
     });
   }
 
-  // ✅ progress (includes questProgress)
   const p = await safeJson(`/badges/progress/${wallet}`);
   setText("progressMeta", `streak:${p.streak} · interactions:${p.interactions}`);
 
-  const box = el("progressBox");
+  const box = $("progressBox");
   const prog = p.progress || [];
   const qprog = p.questProgress || [];
 
-  function bar(label, have, need, unlocked){
-    const pct = need===0 ? 100 : Math.floor((Math.min(have,need)/need)*100);
-    const next = unlocked ? "" : ` · next unlock in: ${Math.max(0,need-have)}`;
-    return `
-      <div style="margin-bottom:12px">
-        <div class="mono"><b>${unlocked ? "✓" : "🔒"} ${label}</b> <span class="muted">${have}/${need}${next}</span></div>
-        <div style="height:10px;border-radius:999px;background:rgba(255,255,255,0.07);overflow:hidden;margin-top:6px">
-          <div style="height:100%;width:${pct}%;background:linear-gradient(90deg,#7c58ff,#00e1ff)"></div>
-        </div>
-      </div>
-    `;
-  }
-
-  // Memory/streak bars
-  const memBars = prog.map(x => bar(x.info?.label || x.badge, x.have, x.need, x.unlocked)).join("");
-
-  // Quest badge bars (need 1 = unlock by completing quest once)
-  const questBars = qprog.map(x => bar(x.info?.label || x.badge, x.have, x.need, x.unlocked)).join("");
+  const mem = prog.map(x => progressRow(x.info?.label || x.badge, x.have, x.need, x.unlocked)).join("");
+  const quest = qprog.map(x => progressRow(x.info?.label || x.badge, x.have, x.need, x.unlocked)).join("");
 
   box.innerHTML = `
-    <div class="tag">Memory & Streak</div>
-    <div style="margin-top:10px">${memBars}</div>
-    <div class="tag" style="margin-top:14px">Quest Badges</div>
-    <div style="margin-top:10px">${questBars}</div>
+    <div class="small" style="padding:12px 12px 0">Memory & Streak</div>
+    ${mem || `<div class="empty" style="display:block">No progress yet.</div>`}
+    <div class="small" style="padding:12px 12px 0">Quest Badges</div>
+    ${quest || `<div class="empty" style="display:block">No quest badges yet.</div>`}
   `;
 
-  // timeline
-  const body=el("walletEvents");
+  const body = $("walletEvents");
   body.innerHTML="";
-  const evs=data.events||[];
-  el("walletEmpty").style.display = evs.length ? "none":"block";
+  const evs = data.events || [];
+  $("walletEmpty").style.display = evs.length ? "none" : "block";
 
   evs.slice(0,40).forEach(e=>{
     const tr=document.createElement("tr");
     tr.innerHTML = `
-      <td class="mono muted">${e.block_time}</td>
+      <td class="mono" style="opacity:.7">${e.block_time}</td>
       <td>${e.kind}</td>
       <td class="mono">${e.amount ?? "-"}</td>
       <td class="mono">${e.other_wallet ? short(e.other_wallet, 18) : "-"}</td>
@@ -198,8 +210,8 @@ async function loadWalletTimeline(wallet){
 }
 
 async function claimQuest(){
-  const wallet = el("claimWallet").value.trim();
-  const signature = el("claimSig").value.trim();
+  const wallet = $("claimWallet").value.trim();
+  const signature = $("claimSig").value.trim();
   if(!wallet || !signature) return;
 
   try{
@@ -217,16 +229,18 @@ async function claimQuest(){
   }
 }
 
-el("refreshBtn").addEventListener("click", async ()=>{
+$("refreshBtn").addEventListener("click", async ()=>{
   await loadHealth();
   await loadQuestOverview();
   await loadClaims();
   await loadActors();
   if(selectedWallet) await loadWalletTimeline(selectedWallet);
 });
-el("claimBtn").addEventListener("click", claimQuest);
+
+$("claimBtn").addEventListener("click", claimQuest);
 
 (async function boot(){
+  statusChip("loading");
   await loadHealth();
   await loadQuestOverview();
   await loadClaims();

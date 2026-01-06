@@ -1,149 +1,213 @@
-<!-- FULL FILE -->
 <!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>Coin Memory</title>
-    <style>
-      /* keep your existing styles — shortened for brevity in message */
-      /* IMPORTANT: replace your current file with your previous aesthetic one if you want,
-         this file only adds new containers with minimal styling so it works immediately. */
-
-      body{ margin:0; font-family: ui-sans-serif, system-ui; background:#07070b; color:#f3f5ff; }
-      .wrap{ max-width:1100px; margin:0 auto; padding:22px 16px 36px; }
-      .card{ border-radius:18px; border:1px solid rgba(255,255,255,0.08); background:rgba(10,10,16,0.75); margin-top:14px; overflow:hidden; }
-      .cardHead{ padding:14px; border-bottom:1px solid rgba(255,255,255,0.06); display:flex; justify-content:space-between; }
-      .cardBody{ padding:14px; }
-      .tag{ font-family: ui-monospace; font-size:12px; opacity:0.8; }
-      .grid2{ display:grid; grid-template-columns: 1fr 1fr; gap:14px; }
-      @media (max-width:900px){ .grid2{ grid-template-columns:1fr; } }
-      .mono{ font-family: ui-monospace; }
-      .btn{ padding:10px 12px; border-radius:14px; border:1px solid rgba(255,255,255,0.08); background:rgba(0,0,0,0.2); color:#fff; cursor:pointer; }
-      .pill{ display:inline-block; padding:6px 10px; border-radius:999px; border:1px solid rgba(255,255,255,0.1); margin-right:8px; font-family: ui-monospace; font-size:11px; }
-      .row{ display:flex; gap:10px; flex-wrap:wrap; }
-      input{ width:100%; padding:12px; border-radius:14px; border:1px solid rgba(255,255,255,0.08); background:rgba(0,0,0,0.22); color:#fff; font-family: ui-monospace; }
-      table{ width:100%; border-collapse:collapse; }
-      th,td{ padding:10px; border-bottom:1px solid rgba(255,255,255,0.06); text-align:left; font-size:13px; }
-      th{ opacity:0.8; font-size:12px; }
-      .muted{ opacity:0.75; }
-    </style>
+    <title>$EMOTIONS — Coin Memory</title>
+    <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
-    <div class="wrap">
-      <div class="card">
-        <div class="cardHead">
-          <b>Coin Memory</b>
-          <div class="tag">vibe dashboard</div>
-        </div>
-        <div class="cardBody">
-          <div class="row">
-            <span class="pill">status: <b id="status">loading</b></span>
-            <span class="pill">raw: <b id="rawCount">-</b></span>
-            <span class="pill">buys: <b id="buyCount">-</b></span>
-            <span class="pill">mint: <span class="mono" id="targetMint">null</span></span>
-            <button class="btn" id="refreshBtn">Refresh</button>
-          </div>
-          <div class="muted" style="margin-top:10px">
-            Creator: <span class="mono" id="creatorWallet">—</span> · <span id="lastUpdated"></span>
-          </div>
-        </div>
-      </div>
+    <div class="bg">
+      <div class="gridlines"></div>
+      <div class="grain"></div>
+      <div class="glow glow-a"></div>
+      <div class="glow glow-b"></div>
+    </div>
 
-      <!-- NEW: Quest Overview (A) -->
-      <div class="grid2">
-        <div class="card">
-          <div class="cardHead">
-            <b>Active Quest (this hour)</b>
-            <div class="tag" id="questCountdown">loading…</div>
+    <main class="wrap">
+      <!-- HEADER -->
+      <header class="top">
+        <div class="brand">
+          <div class="logo">💊</div>
+          <div class="brandText">
+            <h1><span class="ticker">$EMOTIONS</span> <span class="dim">Coin Memory</span></h1>
+            <p class="sub">Pumpfun-style prelaunch dashboard — starts empty, becomes alive the moment your mint exists.</p>
           </div>
-          <div class="cardBody">
-            <div class="tag">claims: <span id="questClaimsCount">-</span></div>
-            <div style="font-size:22px;font-weight:900;margin-top:8px" id="questTitle">—</div>
-            <div class="muted" style="margin-top:6px" id="questRule">—</div>
-            <div class="row" style="margin-top:10px" id="questBadgeWrap"></div>
+        </div>
 
-            <div style="display:grid; grid-template-columns: 1fr 1fr auto; gap:10px; margin-top:14px">
-              <input id="claimWallet" placeholder="wallet address (base58)" />
-              <input id="claimSig" placeholder="tx signature" />
-              <button class="btn" id="claimBtn">CLAIM</button>
+        <div class="topRight">
+          <button class="btn" id="refreshBtn">
+            <span class="btnIcon">⟳</span>
+            Refresh
+          </button>
+        </div>
+      </header>
+
+      <!-- STATUS BAR -->
+      <section class="bar card">
+        <div class="barLeft">
+          <span class="chip" id="statusChip"><span class="dot"></span><b id="status">loading</b></span>
+          <span class="chip"><span class="k">raw</span> <b id="rawCount">-</b></span>
+          <span class="chip"><span class="k">buys</span> <b id="buyCount">-</b></span>
+          <span class="chip"><span class="k">mint</span> <span class="mono" id="targetMint">null</span></span>
+        </div>
+
+        <div class="barRight">
+          <span class="meta">
+            Creator <span class="mono" id="creatorWallet">—</span>
+            <span class="sep">·</span>
+            <span id="lastUpdated">—</span>
+          </span>
+        </div>
+      </section>
+
+      <!-- QUEST GRID -->
+      <section class="grid">
+        <!-- ACTIVE QUEST HERO -->
+        <article class="card hero">
+          <div class="heroTop">
+            <div class="heroTitle">
+              <span class="pill">💊 Quest of the Hour</span>
+              <span class="small" id="questCountdown">loading…</span>
             </div>
-            <div class="muted" style="margin-top:10px">
-              Signature must exist in <span class="mono">raw_events</span> (ingested via webhook).
+            <div class="small">claims: <b id="questClaimsCount">-</b></div>
+          </div>
+
+          <h2 id="questTitle">—</h2>
+          <p class="rule" id="questRule">—</p>
+
+          <div class="chips" id="questBadgeWrap"></div>
+
+          <div class="claimBox">
+            <input class="input" id="claimWallet" placeholder="wallet address (base58)" />
+            <input class="input" id="claimSig" placeholder="tx signature" />
+            <button class="btn primary" id="claimBtn">CLAIM</button>
+          </div>
+
+          <div class="hint">
+            Claims require the signature to exist in <span class="mono">raw_events</span> (ingested via webhook).
+          </div>
+        </article>
+
+        <!-- UPCOMING + POOL -->
+        <aside class="card side">
+          <div class="sideHead">
+            <div>
+              <div class="sideTitle">Upcoming</div>
+              <div class="small">Locked preview · deterministic rotation</div>
             </div>
           </div>
-        </div>
 
-        <div class="card">
-          <div class="cardHead">
-            <b>Upcoming Quests (locked preview)</b>
-            <div class="tag">deterministic rotation</div>
-          </div>
-          <div class="cardBody" id="nextQuests">
-            loading…
+          <div id="nextQuests" class="stack">loading…</div>
+
+          <div class="divider"></div>
+
+          <div class="sideHead">
+            <div>
+              <div class="sideTitle">Quest Pool</div>
+              <div class="small">Proof it’s a system (not random chaos)</div>
+            </div>
           </div>
 
-          <div class="cardHead" style="border-top:1px solid rgba(255,255,255,0.06)">
-            <b>Quest Pool (proof)</b>
-            <div class="tag">not random chaos</div>
-          </div>
-          <div class="cardBody" id="questPool">loading…</div>
-        </div>
-      </div>
+          <div id="questPool" class="stack">loading…</div>
+        </aside>
+      </section>
 
-      <div class="card">
+      <!-- CLAIMS -->
+      <section class="card">
         <div class="cardHead">
-          <b>Recent Claims</b>
-          <div class="tag" id="claimsMeta">(0)</div>
+          <div>
+            <div class="cardTitle">Recent Claims</div>
+            <div class="small" id="claimsMeta">(0)</div>
+          </div>
         </div>
-        <div class="cardBody" style="padding:0">
+        <div class="tableWrap">
           <table>
-            <thead><tr><th>Rank</th><th>Wallet</th><th>Signature</th><th>Time</th></tr></thead>
+            <thead>
+              <tr>
+                <th>Rank</th>
+                <th>Wallet</th>
+                <th>Signature</th>
+                <th>Time</th>
+              </tr>
+            </thead>
             <tbody id="claims"></tbody>
           </table>
-          <div id="claimsEmpty" class="muted" style="padding:12px; display:none">No claims yet this hour.</div>
+          <div id="claimsEmpty" class="empty">No claims yet this hour.</div>
         </div>
-      </div>
+      </section>
 
-      <div class="card">
+      <!-- ACTORS -->
+      <section class="card">
         <div class="cardHead">
-          <b>Actors</b>
-          <div class="tag" id="actorsMeta">(0)</div>
+          <div>
+            <div class="cardTitle">Actors</div>
+            <div class="small" id="actorsMeta">(0)</div>
+          </div>
+          <div class="small">Click a wallet to inspect</div>
         </div>
-        <div class="cardBody" style="padding:0">
+
+        <div class="tableWrap">
           <table>
-            <thead><tr><th>Wallet</th><th>Vibe</th><th>Badges</th><th>Interactions</th></tr></thead>
+            <thead>
+              <tr>
+                <th>Codename</th>
+                <th>Vibe</th>
+                <th>Badges</th>
+                <th>Interactions</th>
+              </tr>
+            </thead>
             <tbody id="actors"></tbody>
           </table>
-          <div id="actorsEmpty" class="muted" style="padding:12px; display:none">No actors yet.</div>
+          <div id="actorsEmpty" class="empty">No actors yet.</div>
         </div>
-      </div>
+      </section>
 
-      <div class="card">
+      <!-- WALLET DETAIL -->
+      <section class="card">
         <div class="cardHead">
-          <b>Selected Wallet</b>
-          <div class="tag" id="walletMeta">click an actor</div>
-        </div>
-        <div class="cardBody">
-          <div class="row" id="walletBadges"></div>
-          <div class="card" style="margin-top:14px">
-            <div class="cardHead"><b>Badge Progress</b><div class="tag" id="progressMeta">—</div></div>
-            <div class="cardBody" id="progressBox"></div>
-          </div>
-          <div class="card" style="margin-top:14px">
-            <div class="cardHead"><b>Timeline</b><div class="tag">last 40</div></div>
-            <div class="cardBody" style="padding:0">
-              <table>
-                <thead><tr><th>Time</th><th>Kind</th><th>Amount</th><th>Other</th><th>Sig</th></tr></thead>
-                <tbody id="walletEvents"></tbody>
-              </table>
-              <div id="walletEmpty" class="muted" style="padding:12px; display:block">No wallet selected.</div>
-            </div>
+          <div>
+            <div class="cardTitle">Wallet</div>
+            <div class="small" id="walletMeta">click an actor</div>
           </div>
         </div>
-      </div>
 
-    </div>
+        <div class="walletGrid">
+          <div class="card inner">
+            <div class="innerHead">
+              <div class="innerTitle">Unlocked Badges</div>
+              <div class="small">latest 20</div>
+            </div>
+            <div class="chips" id="walletBadges"></div>
+          </div>
+
+          <div class="card inner">
+            <div class="innerHead">
+              <div class="innerTitle">Badge Progress</div>
+              <div class="small" id="progressMeta">—</div>
+            </div>
+            <div id="progressBox"></div>
+          </div>
+        </div>
+
+        <div class="card inner" style="margin:14px">
+          <div class="innerHead">
+            <div class="innerTitle">Timeline</div>
+            <div class="small">last 40</div>
+          </div>
+          <div class="tableWrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Kind</th>
+                  <th>Amount</th>
+                  <th>Other</th>
+                  <th>Sig</th>
+                </tr>
+              </thead>
+              <tbody id="walletEvents"></tbody>
+            </table>
+            <div id="walletEmpty" class="empty">No wallet selected.</div>
+          </div>
+        </div>
+      </section>
+
+      <footer class="foot">
+        <span class="small">$EMOTIONS — pumpfun green/white theme</span>
+      </footer>
+    </main>
+
     <script src="/app.js"></script>
   </body>
 </html>
